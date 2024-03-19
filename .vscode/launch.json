@@ -8,8 +8,8 @@
       "args": [],
       "stopAtEntry": false,
       "externalConsole": true,
-      "cwd": "c:/Users/yashv/OneDrive/Documents/GitHub/rememory",
-      "program": "c:/Users/yashv/OneDrive/Documents/GitHub/rememory/build/Debug/outDebug",
+      "cwd": "//wsl.localhost/Ubuntu/home/rosieyxl/rememory",
+      "program": "//wsl.localhost/Ubuntu/home/rosieyxl/rememory/build/Debug/outDebug",
       "MIMode": "gdb",
       "miDebuggerPath": "gdb",
       "setupCommands": [
