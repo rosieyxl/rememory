@@ -119,7 +119,7 @@ void clear_screen(short int color) {
 }
 
 void draw_card(int position, int type) {
-  int x, y;
+  int x=30, y=60;
   const int card_width = CARD_WIDTH;
   const int card_height = CARD_HEIGHT;
 
