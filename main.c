@@ -309,6 +309,9 @@ void interrupt_handler(void) {
 }
 
 void pushbutton_ISR(void) {
+  if (k == 3) {
+    k = 1;
+  }
   volatile int *KEY_ptr = (int *)0xFF200050;
   // take in value of edge capture reg
   int keyValue = switchCard(*(KEY_ptr + 3));
@@ -335,23 +338,21 @@ void pushbutton_ISR(void) {
       draw_card(first_pos, MATCHED_CARD);
       draw_card(second_pos, MATCHED_CARD);
       match_counter++;
-      k = 1;
     } else {
       // not a match loser
       // flip cards back over
       draw_card(first_pos, BACK);
       draw_card(second_pos, BACK);
-      k = 1;
     }
   }
 
-  k++;
-
-  if (match_counter == 4) {
+  if (match_counter >= 4) {
     // all matches made!
     // PRINT WINNING SCREEN (UGLY FUGLY GREEN)
     clear_screen(0x00FF00);
   }
+
+  k++;
 }
 
 void interval_timer_isr(void) {
