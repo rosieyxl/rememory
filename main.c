@@ -374,7 +374,7 @@ int keytracker = 0;
 
 
 void interrupt_handler(void);
-void interval_timer_isr(void);
+void interval_timer_ISR(void);
 void pushbutton_ISR(void);
 void PS2_ISR(void);
 
@@ -431,8 +431,8 @@ int main(void) {
   while (countdown_active); // idle until 5 seconds is up
 
   // Reset PS2 and enable PS2 interrupts
-   *(PS2_ptr) = 0xFF; /* reset */
-   *(PS2_ptr + 1) = 0x1; /* write to the PS/2 Control register to enable interrupts */
+  *(PS2_ptr) = 0xFF; /* reset */
+  *(PS2_ptr + 1) = 0x1; /* write to the PS/2 Control register to enable interrupts */
 
   return 0;
 }
@@ -585,19 +585,16 @@ int switchCard(int switchval) {
 
 void interrupt_handler(void) {
   int ipending;
-  printf("working");
   NIOS2_READ_IPENDING(ipending);
   if (ipending & 0x1) {
-    printf("timer interrupt");
-    interval_timer_isr();}
+    interval_timer_ISR();}
   if(ipending & 0x80) {
     PS2_ISR();
-    printf("keyboard interrupt");
   }
   return;
 }
 
-void interval_timer_isr(void) {
+void interval_timer_ISR(void) {
   // Clear the interrupt flag
   volatile int *interval_timer_ptr = (int *)0xFF202000;
   *interval_timer_ptr = 0;
@@ -620,91 +617,61 @@ void interval_timer_isr(void) {
 
 void PS2_ISR(void)
 {
-  volatile int *PS2_ptr = (int *) 0xFF200100;
   if (k == 3) {
     k = 1;
-  }	int PS2_data, RAVAIL;
-	//volatile int *leds_ptr = (int *)0xFF200000;
+  } // checking if 2 cards have been flipped; then we reset to treat this card as a first flip
+  
+  volatile int *PS2_ptr = (int *) 0xFF200100;
+  int PS2_data, RAVAIL;
 	volatile unsigned int *pressedKey;
-	PS2_data = *(PS2_ptr);							// read the Data register in the PS/2 port
-	RAVAIL = (PS2_data & 0xFFFF0000) >> 16;			// extract the RAVAIL field
-	if (RAVAIL > 0)
-	{
-    byte1 = byte2;
-	byte2 = byte3;
-     byte3= (unsigned char)(PS2_data & 0xFF);
-	}
-  keytracker = 0;
-	 LED_PS2(byte3);
-   switch (keytracker) {
-      case 1:  // Key A
-        draw_card(1, cards[0]);
-        break;
-      case 2:  // Key S
-        draw_card(2, cards[1]);
-        break;
-      case 3:  // Key D
-        draw_card(3, cards[2]);
-        break;
-      case 4:  // Key F
-        draw_card(4, cards[3]);
-        break;
-      case 5:  // Key G
-        draw_card(5, cards[4]);
-        break;
-      case 6:  // Key H
-        draw_card(6, cards[5]);
-        break;
-      case 7:  // Key J
-        draw_card(7, cards[6]);
-        break;
-      case 8:  // Key K
-        draw_card(8, cards[7]);
-        break;
-      default:
-        for (int i = 1; i < 9; i++) {
-          draw_card(i, BACK);
-        }
-        break;
-    }
+	PS2_data = *(PS2_ptr); // read the data register in the PS/2 port
+	RAVAIL = (PS2_data & 0xFFFF0000) >> 16; // extract the RAVAIL field
 
-   if (keytracker> 0 && keypressed == true) {
-      if (k == 1) {
+	if (RAVAIL > 0) {
+    byte1 = byte2;
+	  byte2 = byte3;
+    byte3 = (unsigned char)(PS2_data & 0xFF);
+	} // extracts the pressed key
+
+  keytracker = 0;
+
+	LED_PS2(byte3); // draws the front of the card corresponding to pressed key
+
+  if (keytracker > 0 && keypressed == true) {
+    if (k == 1) {
         first_card = cards[keytracker - 1];
         first_pos = keytracker;
-        //k++;
-      } else if (k == 2) {
+    } else if (k == 2) {
         second_card = cards[keytracker - 1];
         second_pos = keytracker;
-      }
     }
-    // compare the two selected cards;
-    if (k == 2) {
-      if (first_card == second_card) {
-        // match!!
-        // show on LEDs & print a green dot onto the card
-        *leds_ptr = 1;
-        draw_card(first_pos, MATCHED_CARD);
-        draw_card(second_pos, MATCHED_CARD);   
-        match_counter++;
-        //printf("inhere");
-      } else {
-        //not a match loser
-        *leds_ptr = 2;
-        // flip cards back over
-        draw_card(first_pos, BACK);
-        draw_card(second_pos, BACK);
-      }
-    }
+  }
     
-    //need an array to keep it together!
-    if (match_counter >= 8) {
+  // compare the two selected cards;
+  if (k == 2) {
+    if (first_card == second_card) {
+      // match!!
+      *leds_ptr = 1;
+      draw_card(first_pos, MATCHED_CARD);
+      draw_card(second_pos, MATCHED_CARD);   
+      match_counter++;
+    } else {
+      //not a match loser
+      *leds_ptr = 2;
+      // flip cards back over
+      draw_card(first_pos, BACK);
+      draw_card(second_pos, BACK);
+    }
+  }
+
+  if (match_counter >= 8) {
     // all matches made!
     // PRINT WINNING SCREEN (UGLY FUGLY GREEN)
     clear_screen(0x00FF00);
   }
 
   k++;
+
 	return;
 }
 
@@ -729,8 +696,6 @@ void display_hex(int value) {
 }
 
 void LED_PS2(unsigned char letter) {
-  volatile int *leds_ptr = (int *)0xFF200000;
-  // printf("  %d  ", letter);
   switch (letter) {
     case 0x1C:  // Key A
       draw_card(1, cards[0]);
