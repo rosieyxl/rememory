@@ -371,6 +371,7 @@ volatile bool keypressed = false;
 volatile unsigned char key = 0;
 volatile unsigned char byte1, byte2, byte3; 
 int keytracker = 0;
+volatile bool gameEnded = false;
 
 
 void interrupt_handler(void);
@@ -391,7 +392,6 @@ int main(void) {
 
   volatile int *pixel_ctrl_ptr = (int *)0xFF203020;
   pixel_buffer_start = *pixel_ctrl_ptr;
-  volatile unsigned char pressedKey;
 
   // Clear the screen with white color
   clear_screen(0xFFFFFF);
@@ -433,6 +433,8 @@ int main(void) {
   // Reset PS2 and enable PS2 interrupts
   *(PS2_ptr) = 0xFF; /* reset */
   *(PS2_ptr + 1) = 0x1; /* write to the PS/2 Control register to enable interrupts */
+
+  while (!gameEnded); // idle until game ends (either time runs out or they win)
 
   return 0;
 }
@@ -623,7 +625,6 @@ void PS2_ISR(void)
   
   volatile int *PS2_ptr = (int *) 0xFF200100;
   int PS2_data, RAVAIL;
-	volatile unsigned int *pressedKey;
 	PS2_data = *(PS2_ptr); // read the data register in the PS/2 port
 	RAVAIL = (PS2_data & 0xFFFF0000) >> 16; // extract the RAVAIL field
 
@@ -645,6 +646,7 @@ void PS2_ISR(void)
         second_card = cards[keytracker - 1];
         second_pos = keytracker;
     }
+    keypressed = false;
   }
     
   // compare the two selected cards;
@@ -655,6 +657,7 @@ void PS2_ISR(void)
       draw_card(first_pos, MATCHED_CARD);
       draw_card(second_pos, MATCHED_CARD);   
       match_counter++;
+      printf("match made \n");
     } else {
       //not a match loser
       *leds_ptr = 2;
@@ -667,11 +670,11 @@ void PS2_ISR(void)
   if (match_counter >= 8) {
     // all matches made!
     // PRINT WINNING SCREEN (UGLY FUGLY GREEN)
+    gameEnded = true;
     clear_screen(0x00FF00);
   }
 
   k++;
-
 	return;
 }
 
@@ -737,12 +740,8 @@ void LED_PS2(unsigned char letter) {
       keytracker = 8;
       keypressed = true;
       break;
-    default:
-      for (int i = 1; i < 9; i++) {
-        draw_card(i, BACK);
-      }
-      break;
   }
+  return;
 }
   
 /*******************************************************************************
