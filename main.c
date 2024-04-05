@@ -10,7 +10,7 @@
 #define CARD_WIDTH 50
 #define CARD_HEIGHT 70
 #define CARD_GAP 10
-#define BACKGROUND_COLOR 0xFFFFFF
+// #define BACKGROUND_COLOR 0xFFFFFF
 #define BACK 0
 #define MATCHED_CARD 5
 
@@ -1443,23 +1443,29 @@ int first_card, second_card;
 int first_pos, second_pos;
 int graphics[8] = {1, 2, 3, 4, 1, 2, 3, 4};  // the possible graphics
 int cards[8];  // the array of cards; will hold their corresponding graphic
+int matched[8] = {0, 0, 0, 0, 0, 0, 0, 0};
 int j;
 int match_counter = 0;
 bool gameStarted = 0;
 int counter = 100000000;  // 1/(100 MHz) × (5000000) = 50 msec
 volatile bool keypressed = false;
 volatile unsigned char key = 0;
+volatile unsigned char byte1, byte2, byte3;
+volatile int timeout = 0;
+int keytracker = 0;
 
 void interrupt_handler(void);
 void interval_timer_isr(void);
 void pushbutton_ISR(void);
+void PS2_ISR(void);
 
 void clear_screen(short int color);
 void draw_card(int position, int type);
 void plot_pixel(int x, int y, short int color);
 void display_hex(int value);
 int switchCard(int switchval);
-void read_keyboard(unsigned char *pressedKey);
+void LED_PS2(unsigned char letter);
+void HEX_PS2(unsigned char b1, char b2, char b3);
 
 int main(void) {
   /* Declare volatile pointers to I/O registers (volatile means that IO load and
@@ -1468,13 +1474,17 @@ int main(void) {
   volatile int *interval_timer_ptr =
       (int *)0xFF202000;                      // interval timer base address
   volatile int *KEY_ptr = (int *)0xFF200050;  // pushbutton KEY address
+  volatile int *PS2_ptr = (int *)0xFF200100;
 
-  NIOS2_WRITE_IENABLE(0x3); /* set interrupt mask bits for levels 0 (interval
-                             * timer) and level 1 (pushbuttons) */
-  NIOS2_WRITE_STATUS(1);    // enable Nios II interrupts
+  NIOS2_WRITE_IENABLE(
+      0x83);              /* set interrupt mask bits for levels 0 (interval
+                           * timer) and level 1 (pushbuttons) and levels 7 (PS2)*/
+  NIOS2_WRITE_STATUS(1);  // enable Nios II interrupts
 
   /* set the interval timer period for scrolling the HEX displays */
   *(interval_timer_ptr + 0x2) = (counter & 0xFFFF);
+  *(interval_timer_ptr + 0x3) = (counter >> 16) & 0xFFFF;
+
   /* start interval timer, enable its interrupts */
   *(interval_timer_ptr + 1) = 0x7;  // STOP = 0, START = 1, CONT = 1, ITO = 1
   countdown = 6;
@@ -1485,7 +1495,7 @@ int main(void) {
   volatile unsigned char pressedKey;
 
   // Clear the screen with white color
-  clear_screen(BACKGROUND_COLOR);
+  clear_screen(0xFFFFFF);
 
   // RANDOMIZATION OF CARDS
   srand((unsigned int)time(NULL));  // seed with time
@@ -1509,95 +1519,18 @@ int main(void) {
     draw_card(i + 1, cards[i]);
   }
 
-  // while (!gameStarted);  // idle here until timer is done and cards are
-  // flipped
+  while (!gameStarted)
+    ;  // idle here until timer is done and cards are
+       // flipped
+
+  // reset PS2 and enable PS2 interrupts
+  *(PS2_ptr) = 0xFF; /* reset */
+  *(PS2_ptr + 1) =
+      0x1; /* write to the PS/2 Control register to enable interrupts */
 
   // turn on interrupts for KEYS
   *(KEY_ptr + 2) = 0xF;  // write to the pushbutton interrupt mask register
                          // and set mask bits to 1
-
-  while (1) {
-    read_keyboard(&pressedKey);
-    int keytracker = 0;
-    // Here you can add your logic based on the pressed key
-    // For example:
-    switch (key) {
-      case 0x1C:  // Key A
-        draw_card(1, cards[0]);
-        keytracker = 1;
-        keypressed = true;
-        break;
-      case 0x1B:  // Key S
-        draw_card(2, cards[1]);
-        keytracker = 2;
-        keypressed = true;
-        break;
-      case 0x23:  // Key D
-        draw_card(3, cards[2]);
-        keytracker = 3;
-        keypressed = true;
-        break;
-      case 0x2B:  // Key F
-        draw_card(4, cards[3]);
-        keytracker = 4;
-        keypressed = true;
-        break;
-      case 0x34:  // Key G
-        draw_card(5, cards[4]);
-        keytracker = 5;
-        keypressed = true;
-        break;
-      case 0x33:  // Key H
-        draw_card(6, cards[5]);
-        keytracker = 6;
-        keypressed = true;
-        break;
-      case 0x3B:  // Key J
-        draw_card(7, cards[6]);
-        keytracker = 7;
-        keypressed = true;
-        break;
-      case 0x42:  // Key K
-        draw_card(8, cards[7]);
-        keytracker = 8;
-        keypressed = true;
-        break;
-      default:
-        for (int i = 1; i < 9; i++) {
-          draw_card(i, BACK);
-        }
-        break;
-    }
-    if (key > 0 && keypressed == true) {
-      if (k == 1) {
-        first_card = cards[keytracker - 1];
-        first_pos = keytracker;
-        k++;
-      } else if (k == 2) {
-        second_card = cards[keytracker - 1];
-        second_pos = keytracker;
-      }
-    }
-    // compare the two selected cards;
-    if (k == 2) {
-      if (first_card == second_card) {
-        // match!!
-        // show on LEDs & print a green dot onto the card
-        *leds_ptr = 1;
-        draw_card(first_pos, MATCHED_CARD);
-        draw_card(second_pos, MATCHED_CARD);
-        match_counter++;
-      } else {
-        // not a match loser
-        // flip cards back over
-        draw_card(first_pos, BACK);
-        draw_card(second_pos, BACK);
-      }
-    }
-  }
-  while (1)
-    ;  // idle here until game done
-
   return 0;
 }
 
@@ -1755,6 +1688,7 @@ void interrupt_handler(void) {
   NIOS2_READ_IPENDING(ipending);
   if (ipending & 0x1) interval_timer_isr();
   if (ipending & 0x2) pushbutton_ISR();
+  if (ipending & 0x80) PS2_ISR();
   return;
 }
 
@@ -1787,20 +1721,21 @@ void pushbutton_ISR(void) {
       *leds_ptr = 1;
       draw_card(first_pos, MATCHED_CARD);
       draw_card(second_pos, MATCHED_CARD);
+
       match_counter++;
     } else {
       // not a match loser
       // flip cards back over
-      draw_card(first_pos, BACK);
-      draw_card(second_pos, BACK);
+      // draw_card(first_pos, BACK);
+      //  draw_card(second_pos, BACK);
     }
   }
 
-  if (match_counter >= 4) {
-    // all matches made!
-    // PRINT WINNING SCREEN (UGLY FUGLY GREEN)
-    clear_screen(0x00FF00);
-  }
+  // if (match_counter >= 4) {
+  //  all matches made!
+  //  PRINT WINNING SCREEN (UGLY FUGLY GREEN)
+  // clear_screen(0x00FF00);
+  //}
 
   k++;
 }
@@ -1823,6 +1758,112 @@ void interval_timer_isr(void) {
       draw_card(i, BACK);
     }
   }
+  // timeout = 1;
+}
+
+void PS2_ISR(void) {
+  volatile int *PS2_ptr = (int *)0xFF200100;
+  if (k == 3) {
+    k = 1;
+  }
+  int PS2_data, RAVAIL;
+  // volatile int *leds_ptr = (int *)0xFF200000;
+  volatile unsigned int *pressedKey;
+  PS2_data = *(PS2_ptr);  // read the Data register in the PS/2 port
+  RAVAIL = (PS2_data & 0xFFFF0000) >> 16;  // extract the RAVAIL field
+  if (RAVAIL > 0) {
+    byte1 = byte2;
+    byte2 = byte3;
+    byte3 = (unsigned char)(PS2_data & 0xFF);
+  }
+  keytracker = 0;
+  key_pressed = false;
+  LED_PS2(byte3);
+  switch (keytracker) {
+    case 1:  // Key A
+      draw_card(1, cards[0]);
+      break;
+    case 2:  // Key S
+      draw_card(2, cards[1]);
+      break;
+    case 3:  // Key D
+      draw_card(3, cards[2]);
+      break;
+    case 4:  // Key F
+      draw_card(4, cards[3]);
+      break;
+    case 5:  // Key G
+      draw_card(5, cards[4]);
+      break;
+    case 6:  // Key H
+      draw_card(6, cards[5]);
+      break;
+    case 7:  // Key J
+      draw_card(7, cards[6]);
+      break;
+    case 8:  // Key K
+      draw_card(8, cards[7]);
+      break;
+    default:
+      for (int i = 1; i < 9; i++) {
+        draw_card(i, BACK);
+      }
+      break;
+  }
+
+  if (keytracker > 0 && keypressed == true) {
+    if (k == 1) {
+      first_card = cards[keytracker - 1];
+      first_pos = keytracker;
+      // k++;
+    } else if (k == 2) {
+      second_card = cards[keytracker - 1];
+      second_pos = keytracker;
+    }
+  }
+  // compare the two selected cards;
+  if (k == 2) {
+    if (first_card == second_card) {
+      // match!!
+      // show on LEDs & print a green dot onto the card
+      *leds_ptr = 1;
+      draw_card(first_pos, MATCHED_CARD);
+      draw_card(second_pos, MATCHED_CARD);
+      for (int i = 8; i < 0; i--) {
+        if (matched[i] == 0) {
+          matched[i] = first_pos;
+        }
+      }
+      for (int i = 8; i < 0; i--) {
+        if (matched[i] == 0) {
+          matched[i] = second_pos;
+        }
+      }
+      match_counter++;
+      // printf("inhere");
+    } else {
+      // not a match loser
+      *leds_ptr = 2;
+      // flip cards back over
+      draw_card(first_pos, BACK);
+      draw_card(second_pos, BACK);
+    }
+  }
+
+  for (int i = 8; i < 0; i--) {
+    if (matched[i] != 0) {
+      draw_card(matched[i], MATCHED_CARD);
+    }
+  }
+  // need an array to keep it together!
+  if (match_counter >= 8) {
+    // all matches made!
+    // PRINT WINNING SCREEN (UGLY FUGLY GREEN)
+    clear_screen(0x00FF00);
+  }
+
+  k++;
+  return;
 }
 
 void display_hex(int value) {
@@ -1845,33 +1886,55 @@ void display_hex(int value) {
   }
 }
 
-void read_keyboard(unsigned char *pressedKey) {
-  volatile int *PS2_ptr = (int *)0xFF200100;
-  int data = *PS2_ptr;
-  *pressedKey = (unsigned char)(data & 0xFF);
-
-  // Check if key A (0x1C), S (0x1B), D (0x23), F (0x2B), G (0x34),
-  // H (0x33), J (0x3B), or K (0x42) was pressed
-  switch (*pressedKey) {
+void LED_PS2(unsigned char letter) {
+  volatile int *leds_ptr = (int *)0xFF200000;
+  // printf("  %d  ", letter);
+  switch (letter) {
     case 0x1C:  // Key A
-    case 0x1B:  // Key S
-    case 0x23:  // Key D
-    case 0x2B:  // Key F
-    case 0x34:  // Key G
-    case 0x33:  // Key H
-    case 0x3B:  // Key J
-    case 0x42:  // Key K
+      draw_card(1, cards[0]);
+      keytracker = 1;
       keypressed = true;
-      key = *pressedKey;
+      break;
+    case 0x1B:  // Key S
+      draw_card(2, cards[1]);
+      keytracker = 2;
+      keypressed = true;
+      break;
+    case 0x23:  // Key D
+      draw_card(3, cards[2]);
+      keytracker = 3;
+      keypressed = true;
+      break;
+    case 0x2B:  // Key F
+      draw_card(4, cards[3]);
+      keytracker = 4;
+      keypressed = true;
+      break;
+    case 0x34:  // Key G
+      draw_card(5, cards[4]);
+      keytracker = 5;
+      keypressed = true;
+      break;
+    case 0x33:  // Key H
+      draw_card(6, cards[5]);
+      keytracker = 6;
+      keypressed = true;
+      break;
+    case 0x3B:  // Key J
+      draw_card(7, cards[6]);
+      keytracker = 7;
+      keypressed = true;
+      break;
+    case 0x42:  // Key K
+      draw_card(8, cards[7]);
+      keytracker = 8;
+      keypressed = true;
       break;
     default:
-      keypressed = false;
+      for (int i = 1; i < 9; i++) {
+        draw_card(i, BACK);
+      }
       break;
-  }
-
-  // Wait until a new key is pressed
-  while (data & 0x8000) {
-    data = *PS2_ptr;
   }
 }
 
