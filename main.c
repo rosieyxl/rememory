@@ -1,11 +1,10 @@
 #include <math.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
-#include <stdint.h>
 #include <unistd.h>
-#include "graphics.h"
 
 #define SCREEN_WIDTH 320
 #define SCREEN_HEIGHT 240
@@ -20,6 +19,18 @@ volatile int *switches_ptr = (int *)0xFF200040;
 volatile int *leds_ptr = (int *)0xFF200000;
 volatile int HEX_BASE1 = 0xff200020;
 volatile int HEX_BASE2 = 0xff200030;
+
+struct audio_t {
+  volatile unsigned int control;
+  volatile unsigned char rarc;
+  volatile unsigned char ralc;
+  volatile unsigned char warc;
+  volatile unsigned char walc;
+  volatile unsigned int ldata;
+  volatile unsigned int rdata;
+};
+
+struct audio_t *const audiop = ((struct audio_t *)0xff203040);
 
 #ifndef __NIOS2_CTRL_REG_MACROS__
 #define __NIOS2_CTRL_REG_MACROS__
@@ -77,11 +88,13 @@ int counter = 100000000;  // 1/(100 MHz) × (5000000) = 50 msec
 volatile bool keypressed = false;
 volatile bool extrainterrupt = true;
 volatile unsigned char key = 0;
-volatile unsigned char byte1, byte2, byte3; 
+volatile unsigned char byte1, byte2, byte3;
 int keytracker = 0;
 volatile bool gameEnded = false;
 bool spacePressed = false;
-bool wonGame = false;
+volatile bool wonGame = false;
+volatile int samples_n = 34899;
+volatile int samples_w = 16509;
 
 void interrupt_handler(void);
 void interval_timer_ISR(void);
@@ -93,10 +106,12 @@ void draw_card(int position, int type);
 void plot_pixel(int x, int y, short int color);
 void display_hex(int value);
 void LED_PS2(unsigned char letter);
+void audio_playback_mono(int *samples, int n);
 
 int main(void) {
-  volatile int *interval_timer_ptr = (int *)0xFF202000; // interval timer base address
-  volatile int *PS2_ptr = (int *) 0xFF200100;
+  volatile int *interval_timer_ptr =
+      (int *)0xFF202000;  // interval timer base address
+  volatile int *PS2_ptr = (int *)0xFF200100;
 
   volatile int *pixel_ctrl_ptr = (int *)0xFF203020;
   pixel_buffer_start = *pixel_ctrl_ptr;
@@ -109,17 +124,17 @@ int main(void) {
   }
 
   // poll for the spacebar being pressed
-  int  PS2_data, RVALID;
+  int PS2_data, RVALID;
   char byte1 = 0, byte2 = 0, byte3 = 0;
 
   while (!spacePressed) {
-    PS2_data = *(PS2_ptr);        // read the Data register in the PS/2 port
-    RVALID   = PS2_data & 0x8000; // extract the RVALID field
+    PS2_data = *(PS2_ptr);       // read the Data register in the PS/2 port
+    RVALID = PS2_data & 0x8000;  // extract the RVALID field
     if (RVALID) {
-        /* shift the next data byte into the display */
-        byte1 = byte2;
-        byte2 = byte3;
-        byte3 = PS2_data & 0xFF;
+      /* shift the next data byte into the display */
+      byte1 = byte2;
+      byte2 = byte3;
+      byte3 = PS2_data & 0xFF;
     }
     if (byte3 == 0x29) {
       spacePressed = true;
@@ -154,9 +169,10 @@ int main(void) {
     draw_card(i + 1, cards[i]);
   }
 
-  NIOS2_WRITE_IENABLE(0x83); /* set interrupt mask bits for levels 0 (interval
-                             * timer) and level 1 (pushbuttons) and levels 7 (PS2)*/
-  NIOS2_WRITE_STATUS(1);    // enable Nios II interrupts
+  NIOS2_WRITE_IENABLE(
+      0x83);              /* set interrupt mask bits for levels 0 (interval
+                           * timer) and level 1 (pushbuttons) and levels 7 (PS2)*/
+  NIOS2_WRITE_STATUS(1);  // enable Nios II interrupts
 
   // set the interval timer period for scrolling the HEX displays
   *(interval_timer_ptr + 0x2) = (counter & 0xFFFF);
@@ -165,14 +181,15 @@ int main(void) {
   // start interval timer, enable its interrupts
   *(interval_timer_ptr + 1) = 0x7;  // STOP = 0, START = 1, CONT = 1, ITO = 1
 
-  while (countdown_active); // idle until 5 seconds is up
+  while (countdown_active);  // idle until 5 seconds is up
 
   // turn off timer interrupts
   NIOS2_WRITE_IENABLE(0b10000010);
 
   // Reset PS2 and enable PS2 interrupts
   *(PS2_ptr) = 0xFF; /* reset */
-  *(PS2_ptr + 1) = 0x1; /* write to the PS/2 Control register to enable interrupts */
+  *(PS2_ptr + 1) =
+      0x1; /* write to the PS/2 Control register to enable interrupts */
 
   int num_seconds = 10;
   while (!gameEnded) {
@@ -187,7 +204,7 @@ int main(void) {
     if (num_seconds == 0) {
       gameEnded = true;
     }
-  }; // idle until game ends (either time runs out or they win)
+  };  // idle until game ends (either time runs out or they win)
 
   if (!wonGame) {
     // draw losing screen :(
@@ -196,6 +213,13 @@ int main(void) {
         plot_pixel(x, y, lost[y][x]);
       }
     }
+    audio_playback_mono(samples, samples_n);
+    printf("you lost");
+  }
+
+  else if (wonGame) {
+    audio_playback_mono(sampleswinn, samples_w);
+    printf("you win");
   }
 
   // disable all interrupts
@@ -273,7 +297,8 @@ void draw_card(int position, int type) {
     case 2:
       for (int i = 0; i < card_height; i++) {
         for (int j = 0; j < card_width; j++) {
-          plot_pixel(x + j, y + i, donut[i][j]);  // blue for front side of cards
+          plot_pixel(x + j, y + i,
+                     donut[i][j]);  // blue for front side of cards
         }
       }
       plot_pixel(x, y, 0xFFFFFF);
@@ -283,7 +308,8 @@ void draw_card(int position, int type) {
     case 3:
       for (int i = 0; i < card_height; i++) {
         for (int j = 0; j < card_width; j++) {
-          plot_pixel(x + j, y + i, headphones[i][j]);  // blue for front side of cards
+          plot_pixel(x + j, y + i,
+                     headphones[i][j]);  // blue for front side of cards
         }
       }
       plot_pixel(x, y, 0xFFFFFF);
@@ -306,7 +332,8 @@ void draw_card(int position, int type) {
     case MATCHED_CARD:
       for (int i = 0; i < card_height; i++) {
         for (int j = 0; j < card_width; j++) {
-          plot_pixel(x + j, y + i, matchedcard[i][j]);  // graphic for a matched card
+          plot_pixel(x + j, y + i,
+                     matchedcard[i][j]);  // graphic for a matched card
         }
       }
       break;
@@ -323,8 +350,9 @@ void interrupt_handler(void) {
   int ipending;
   NIOS2_READ_IPENDING(ipending);
   if (ipending & 0x1) {
-    interval_timer_ISR();}
-  if(ipending & 0x80) {
+    interval_timer_ISR();
+  }
+  if (ipending & 0x80) {
     PS2_ISR();
   }
   return;
@@ -357,83 +385,83 @@ void interval_timer_ISR(void) {
   }
 }
 
-void PS2_ISR(void)
-{ 
-  volatile int *PS2_ptr = (int *) 0xFF200100;
+void PS2_ISR(void) {
+  volatile int *PS2_ptr = (int *)0xFF200100;
   int PS2_data, RAVAIL;
-  PS2_data = *(PS2_ptr); // read the data register in the PS/2 port
-  RAVAIL = (PS2_data & 0xFFFF0000) >> 16; // extract the RAVAIL field
+  PS2_data = *(PS2_ptr);  // read the data register in the PS/2 port
+  RAVAIL = (PS2_data & 0xFFFF0000) >> 16;  // extract the RAVAIL field
   int hold = 0;
-  
+
   if (RAVAIL > 0) {
     byte1 = byte2;
-	  byte2 = byte3;
+    byte2 = byte3;
     byte3 = (unsigned char)(PS2_data);
-    } // extracts the pressed key
+  }  // extracts the pressed key
 
   keytracker = 0;
-  
-  LED_PS2(byte3); // draws the front of the card corresponding to pressed key
+
+  LED_PS2(byte3);  // draws the front of the card corresponding to pressed key
 
   if (!keypressed) {
-    // the detected data was a BREAK code; we ignore it by breaking out of the ISR
+    // the detected data was a BREAK code; we ignore it by breaking out of the
+    // ISR
     return;
   }
 
   // delay loop to SHOW the cards
   int counter = 20000000;
   while (counter > 0) {
-    counter--; 
+    counter--;
   }
 
   if (k == 3) {
     k = 1;
-  } // checking if 2 cards have been flipped; then we reset to treat this card as a first flip
+  }  // checking if 2 cards have been flipped; then we reset to treat this card
+     // as a first flip
 
   if (keytracker > 0 && keypressed == true) {
     if (k == 1) {
-        first_card = cards[keytracker - 1];
-        first_pos = keytracker;
-        printf("keypressed %d, /n",k);
+      first_card = cards[keytracker - 1];
+      first_pos = keytracker;
+      printf("keypressed %d, /n", k);
     } else if (k == 2) {
-        second_card = cards[keytracker - 1];
-        second_pos = keytracker;
-        printf("keypressed %d, /n",k);
-
+      second_card = cards[keytracker - 1];
+      second_pos = keytracker;
+      printf("keypressed %d, /n", k);
     }
     keypressed = false;
-  
-  // compare the two selected cards;
-  if (k == 2) {
-    if (first_card == second_card) {
-      // match!!
-      *leds_ptr = 1;
-      draw_card(first_pos, MATCHED_CARD);
-      printf("being matched");
-      draw_card(second_pos, MATCHED_CARD);   
-      match_counter++;
-    } else {
-      //not a match loser
-      *leds_ptr = 2;
-      // flip cards back over
-      draw_card(first_pos, BACK);
-      draw_card(second_pos, BACK);
-    }
-  }
 
-  if (match_counter >= 4) {
-    // all matches made!
-    // PRINT WINNING SCREEN (UGLY FUGLY GREEN)
-    gameEnded = true;
-    wonGame = true;
-    for (int y = 0; y < SCREEN_HEIGHT; y++) {
-      for (int x = 0; x < SCREEN_WIDTH; x++) {
-        plot_pixel(x, y, win[y][x]);
+    // compare the two selected cards;
+    if (k == 2) {
+      if (first_card == second_card) {
+        // match!!
+        *leds_ptr = 1;
+        draw_card(first_pos, MATCHED_CARD);
+        printf("being matched");
+        draw_card(second_pos, MATCHED_CARD);
+        match_counter++;
+      } else {
+        // not a match loser
+        *leds_ptr = 2;
+        // flip cards back over
+        draw_card(first_pos, BACK);
+        draw_card(second_pos, BACK);
       }
     }
-  }
 
-k++;
+    if (match_counter >= 4) {
+      // all matches made!
+      // PRINT WINNING SCREEN (UGLY FUGLY GREEN)
+      gameEnded = true;
+      wonGame = true;
+      for (int y = 0; y < SCREEN_HEIGHT; y++) {
+        for (int x = 0; x < SCREEN_WIDTH; x++) {
+          plot_pixel(x, y, win[y][x]);
+        }
+      }
+    }
+
+    k++;
   }
   return;
 }
@@ -459,107 +487,130 @@ void display_hex(int value) {
 }
 
 void LED_PS2(unsigned char letter) {
-   extrainterrupt = true;
+  extrainterrupt = true;
 
   switch (letter) {
     printf("switch");
-    case 0x1C:  // Key A
-      if(track == 1){ //checking for extra interrupts
-        extrainterrupt=false;
+    case 0x1C:           // Key A
+      if (track == 1) {  // checking for extra interrupts
+        extrainterrupt = false;
         track = 0;
       }
-      if(extrainterrupt){ //only proceed for first interrupt, ignore the other ones!
-      draw_card(1, cards[0]);
-      keytracker = 1;
-      keypressed = true;
-      track++;
-      printf("track %d", track);}
+      if (extrainterrupt) {  // only proceed for first interrupt, ignore the
+                             // other ones!
+        draw_card(1, cards[0]);
+        keytracker = 1;
+        keypressed = true;
+        track++;
+        printf("track %d", track);
+      }
       break;
     case 0x1B:  // Key S
-     if(track == 1){
-        extrainterrupt=false;
+      if (track == 1) {
+        extrainterrupt = false;
         track = 0;
       }
-      if(extrainterrupt){
-      draw_card(2, cards[1]);
-      keytracker = 2;
-      keypressed = true;
-      track++;
+      if (extrainterrupt) {
+        draw_card(2, cards[1]);
+        keytracker = 2;
+        keypressed = true;
+        track++;
       }
       break;
     case 0x23:  // Key D
-     if(track == 1){
-        extrainterrupt=false;
+      if (track == 1) {
+        extrainterrupt = false;
         track = 0;
       }
-      if(extrainterrupt){
-      draw_card(3, cards[2]);
-      keytracker = 3;
-      keypressed = true;
-      track++;}
+      if (extrainterrupt) {
+        draw_card(3, cards[2]);
+        keytracker = 3;
+        keypressed = true;
+        track++;
+      }
       break;
     case 0x2B:  // Key F
-      if(track == 1){
-        extrainterrupt=false;
+      if (track == 1) {
+        extrainterrupt = false;
         track = 0;
       }
-      if(extrainterrupt){
-      draw_card(4, cards[3]);
-      keytracker = 4;
-      keypressed = true;
-      track++;}
+      if (extrainterrupt) {
+        draw_card(4, cards[3]);
+        keytracker = 4;
+        keypressed = true;
+        track++;
+      }
       break;
     case 0x1A:  // Key Z
-      if(track == 1){
-        extrainterrupt=false;
+      if (track == 1) {
+        extrainterrupt = false;
         track = 0;
       }
-      if(extrainterrupt){
-      draw_card(5, cards[4]);
-      keytracker = 5;
-      keypressed = true;
-      track++;}
+      if (extrainterrupt) {
+        draw_card(5, cards[4]);
+        keytracker = 5;
+        keypressed = true;
+        track++;
+      }
       break;
     case 0x22:  // Key X
-      if(track == 1){
-        extrainterrupt=false;
+      if (track == 1) {
+        extrainterrupt = false;
         track = 0;
       }
-      if(extrainterrupt){
-      draw_card(6, cards[5]);
-      keytracker = 6;
-      keypressed = true;
-      track++;}
+      if (extrainterrupt) {
+        draw_card(6, cards[5]);
+        keytracker = 6;
+        keypressed = true;
+        track++;
+      }
       break;
     case 0x21:  // Key C
-      if(track == 1){
-        extrainterrupt=false;
+      if (track == 1) {
+        extrainterrupt = false;
         track = 0;
       }
-      if(extrainterrupt){
-      draw_card(7, cards[6]);
-      keytracker = 7;
-      keypressed = true;
-      track++;}
+      if (extrainterrupt) {
+        draw_card(7, cards[6]);
+        keytracker = 7;
+        keypressed = true;
+        track++;
+      }
       break;
     case 0x2A:  // Key v
-      if(track == 1){
-        extrainterrupt=false;
+      if (track == 1) {
+        extrainterrupt = false;
         track = 0;
       }
-      if(extrainterrupt){
-      draw_card(8, cards[7]);
-      keytracker = 8;
-      keypressed = true;
-      track++;}
+      if (extrainterrupt) {
+        draw_card(8, cards[7]);
+        keytracker = 8;
+        keypressed = true;
+        track++;
+      }
       break;
     default:
-        keypressed = false;
-        break;
+      keypressed = false;
+      break;
   }
   return;
 }
-  
+
+void audio_playback_mono(int *samples, int n) {
+  int i = 0;
+
+  audiop->control = 0x8;  // clear the output FIFOs
+  audiop->control = 0x0;  // resume input conversion
+  while (i < n) {
+    // output data if there is space in the output FIFOs
+    if (audiop->warc) {
+      audiop->ldata = samples[i];
+      audiop->rdata = samples[i];
+      i++;
+    }
+  }
+}
+
 /*******************************************************************************
  * Reset code; by using the section attribute with the name ".reset" we allow
  *the linker program to locate this code at the proper reset vector address.
